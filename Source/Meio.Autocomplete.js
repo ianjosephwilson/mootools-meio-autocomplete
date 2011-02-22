@@ -713,7 +713,9 @@ provides: [Meio.Autocomplete]
 		
 		render: function(){
 			var node = new Element('div', {'class': this.options.classes.container});
-			if (node.bgiframe) node.bgiframe({top: 0, left: 0});
+			if (Browser.ie && Browser.version == 6) {
+				this.shim = new IframeShim(node, {top: 0, left: 0});
+			}
 			this.list = new Element('ul').inject(node);
 			$(document.body).grab(node);
 			return node;
