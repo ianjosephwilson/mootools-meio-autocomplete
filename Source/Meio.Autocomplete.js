@@ -35,20 +35,28 @@ changes:
         'paste': 2,
         'input': 2
     });
+
     Element.Events.paste = {
-        base : (browser.opera || (browser.firefox && browser.version < 3)) ?
-                'input' : 'paste',
         condition: function (e) {
             this.fireEvent('paste', e, 1);
             return false;
         }
     };
+    if (browser.opera || (browser.firefox && browser.version < 3)) {
+        Element.Events.paste.base = 'input';
+    } else {
+        Element.Events.paste.base = 'paste';
+    }
     
     // the key event that repeats
     Element.Events.keyrepeat = {
-        base : (browser.firefox || browser.opera) ? 'keypress' : 'keydown',
         condition: Function.from(true)
     };
+    if (browser.firefox || browser.opera) {
+        Element.Events.keyrepeat.base = 'keypress';
+    } else {
+        Element.Events.keyrepeat.base = 'keydown';
+    }
     
     // Autocomplete itself
 
@@ -281,7 +289,8 @@ changes:
         
         update: function () {
             var data, list, cacheKey, cached, html, itemsHtml, itemsData,
-            classes, text, filter, formatMatch, formatItem, row, i, n;
+                    classes, text, filter, formatMatch, formatItem, row, i, n,
+                    cssClass;
             data = this.data;
             list = this.elements.list;
             cacheKey = data.getKey();
@@ -301,12 +310,17 @@ changes:
                 for (i = 0, n = 0; i < data.length; i = i + 1) {
                     row = data[i];
                     if (filter.call(this, text, row)) {
+                        if (n % 2) {
+                            cssClass = classes.even;
+                        } else {
+                            cssClass = classes.odd;
+                        }
                         itemsHtml.push(
                             '<li title="',
                             encode(formatMatch.call(this, text, row)),
                             '" data-index="', n,
                             '" class="',
-                            (n % 2 ? classes.even : classes.odd), '">',
+                            cssClass, '">',
                             formatItem.call(this, text, row, n),
                             '</li>'
                         );
@@ -399,11 +413,13 @@ changes:
         },
         
         initData: function (data) {
-            this.data = (typeOf(data) == 'string') ?
-                new Meio.Autocomplete.Data.Request(data, this.cache,
-                        this.elements.field, this.options.requestOptions,
-                        this.options.urlOptions) :
-                new Meio.Autocomplete.Data(data, this.cache);
+            if (typeOf(data) == 'string') {
+                this.data = new Meio.Autocomplete.Data.Request(data,
+                        this.cache, this.elements.field,
+                        this.options.requestOptions, this.options.urlOptions);
+            } else {
+                this.data = new Meio.Autocomplete.Data(data, this.cache);
+            }
             this.data.addEvent('ready', this.dataReady.bind(this));
         },
         
@@ -774,9 +790,13 @@ changes:
         applyMaxHeight: function (maxVisibleItems) {
             var listChildren, node, i;
             listChildren = this.list.childNodes;
-            node = listChildren[maxVisibleItems - 1] ||
-                    (listChildren.length ?
-                    listChildren[listChildren.length - 1] : null);
+            node = null;
+            // TODO: Remove possible accesses to undefined portions of array.
+            if (listChildren[maxVisibleItems - 1]) {
+                node = listChildren[maxVisibleItems - 1];
+            } else if (listChildren.length) {
+                node = listChildren[listChildren.length - 1];
+            }
             if (!node) {
                 return;
             }
@@ -1088,7 +1108,12 @@ changes:
             this.setOptions(options);
             this.rawUrl = url;
             this.url = url;
-            this.url += this.url.contains('?') ? '&' : '?';
+            if (this.url.contains('?')) {
+                this.url +=  '&';
+            } else {
+                this.url += '?';
+            }
+            
             this.dynamicExtraParams = [];
             params = Array.from(this.options.extraParams);
             for (i = params.length - 1; i >= 0; i = i - 1) {
