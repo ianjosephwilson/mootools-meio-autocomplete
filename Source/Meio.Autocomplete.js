@@ -25,7 +25,7 @@ changes:
 */
 
 (function (global, $) {
-    var browser, Meio, globalCache, keysThatDontChangeValueOnKeyUp, encode;
+    var browser, Meio, globalCache, commandKeys, encode;
     browser = Browser; // better compression and faster
 
     // Custom Events
@@ -62,7 +62,7 @@ changes:
 
     Meio = global.Meio || {};
     
-    keysThatDontChangeValueOnKeyUp = {
+    commandKeys = {
         9:   1,  // tab
         16:  1,  // shift
         17:  1,  // control
@@ -239,7 +239,7 @@ changes:
                 },
                 'keyup': function (e) {
                     var field = this.elements.field;
-                    if (!keysThatDontChangeValueOnKeyUp[e.code]) {
+                    if (!commandKeys[e.code]) {
                         if (!field.keyPressControl[e.key]) {
                             this.setupList();
                         }
