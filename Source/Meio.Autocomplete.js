@@ -21,12 +21,14 @@ changes:
   - Conform to JSLint with command line options:
     --encoding utf8 --white --indent 4 --maxlen 80 --plusplus --maxerr 50
     --onevar --bitwise --undef --nomen --newcap --regexp
+  - Remove Cache, Request and Filter.
+  - Consoldate element behaviour.
+
 ...
 */
 
-(function (global, $) {
-    var browser, Meio, globalCache, commandKeys, encode;
-    browser = Browser; // better compression and faster
+(function ($) {
+    var commandKeys, Autocomplete;
 
     // Custom Events
 
@@ -42,7 +44,7 @@ changes:
             return false;
         }
     };
-    if (browser.opera || (browser.firefox && browser.version < 3)) {
+    if (Browser.opera || (Browser.firefox && Browser.version < 3)) {
         Element.Events.paste.base = 'input';
     } else {
         Element.Events.paste.base = 'paste';
@@ -52,16 +54,12 @@ changes:
     Element.Events.keyrepeat = {
         condition: Function.from(true)
     };
-    if (browser.firefox || browser.opera) {
+    if (Browser.firefox || Browser.opera) {
         Element.Events.keyrepeat.base = 'keypress';
     } else {
         Element.Events.keyrepeat.base = 'keydown';
     }
-    
-    // Autocomplete itself
 
-    Meio = global.Meio || {};
-    
     commandKeys = {
         9:   1,  // tab
         16:  1,  // shift
@@ -75,1133 +73,628 @@ changes:
         40:  1   // down
     }; 
     
-    encode = function (str) {
-        return str.replace(/\"/g, '&quot;').replace(/\'/g, '&#39;');
-    };
-    
-    Meio.Widget = new Class({
-        
-        initialize: function () {
-            this.elements = {};
-        },
-        
-        addElement: function (name, obj) {
-            this.elements[name] = obj;
-        },
-        
-        addEventToElement: function (name, eventName, event) {
-            this.elements[name].addEvent(eventName, event.bind(this));
-        },
-        
-        addEventsToElement: function (name, events) {
-            for (var eventName in events) {
-                if (events.hasOwnProperty(eventName)) {
-                    this.addEventToElement(name, eventName, events[eventName]);
-                }
-            }
-        },
-        
-        attach: function () {
-            for (var element in this.elements) {
-                if (this.elements.hasOwnProperty(element)) {
-                    this.elements[element].attach();
-                }
-            }
-        },
-        
-        detach: function () {
-            for (var element in this.elements) {
-                if (this.elements.hasOwnProperty(element)) {
-                    this.elements[element].detach();
-                }
-            }
-        },
-        
-        destroy: function () {
-            for (var element in this.elements) {
-                if (this.elements.hasOwnProperty(element) &&
-                        this.elements[element]) {
-                    this.elements[element].destroy();
-                }
-            }
-        }
-    });
-    
-    Meio.Autocomplete = new Class({
-        
-        Extends: Meio.Widget,
-        
+    Autocomplete = new Class({
         Implements: [Options, Events],
         
         options: {
-            
-            delay: 200,
-            minChars: 0,
-            cacheLength: 20,
-            selectOnTab: true,
-            maxVisibleItems: 10,
-            cacheType: 'shared', // 'shared' or 'own'
-            
-            filter: {
-                /*
-                    its posible to pass the filters directly or
-                    by passing a type and optionaly a path.
-                    
-                    filter: function (text, data) {}
-                    formatMatch: function (text, data, i) {}
-                    formatItem: function (text, data) {}
-                    
-                    or
-
-                    // can be any defined on the Meio.Autocomplete.Filter
-                    // object
-                    type: 'startswith' or 'contains'
-                    // path to the text value on each object thats
-                    // contained on the data array
-                    path: 'a.b.c'
-                */
+            // Width of the container for the results.
+            // If no value is given then width is retrieved from input element.
+            widthOfResultsContainer: null,
+            // CSS Classes used.
+            classes: {
+                container: 'ma-container',
+                hover: 'ma-hover',
+                odd: 'ma-odd',
+                even: 'ma-even',
+                selected: 'ma-selected',
+                loading: 'ma-loading',
+                empty: 'ma-empty'
             },
-            
+            // The minimum number of chars to cause a request for results.
+            minChars: 0,
+            // True if the tab key should cause the list item with focus to
+            //      be selected.
+            selectOnTab: true,
+            // The max number of list items to be shown in the results
+            //     container.
+            maxVisibleItems: 10,
+            // The entire li.
+            formatResult: null,
+            // Title of li.
+            formatTitle: null,
+            // Content of li.
+            formatContent: null,
+            // Called when a new result has been selected.
+            //
+            // function onSelect (listItemEl, result, resultIndex) {}
+            onSelect: null,
+            // Called when a prior result was selected but
+            // has become de-selected.
+            //
+            // function onDeselect (listItemEl, result, resultIndex) {}
+            onDeselect: null,
+            //
+            // The function startSyncResultsRequest is called to request results
+            //     when the autocomplete is attached.  The callee will call
+            //     onSuccess with the results. The callee will call onFailure on
+            //     any error. Empty results are NOT an error. It is expected 
+            //     that in most cases a request will be fake and pull straight
+            //     from the dom.
+            //
+            // function startSyncResultsRequest (inputedText, onSuccess,
+            //         onFailure) {
+            //     onSuccess([]);
+            // }
+            startSyncResultsRequest: null,
+            // The function stopResultsRequest is meant to cancel a sync request
+            //     for results that was started earlier.  If there is no request
+            //     to cancel then nothing will be done.
+            //
+            // function stopSyncResultsRequest() {}
+            stopSyncResultsRequest: null
+        },
+        
+        initialize: function (startResultsRequest, stopResultsRequest,
+                options) {
             /*
-            onNoItemToList: function (elements) {},
-            onSelect: function (elements, value) {},
-            onDeselect: function (elements) {},
-            */
-            
-            fieldOptions: {}, // see Element options
-            listOptions: {}, // see List options
-            requestOptions: {}, // see DataRequest options
-            urlOptions: {} // see URL options
-            
-        },
-        
-        initialize: function (input, data, options, listInstance) {
-            this.parent();
-            this.setOptions(options);
-            this.active = 0;
-            
-            this.filters = Meio.Autocomplete.Filter.get(this.options.filter);
 
-            if (!listInstance) {
-                listInstance = new Meio.Element.List(this.options.listOptions);
+            The function startResultsRequest is called to request results. The
+                callee will call onSuccess with the results. The callee will
+                call onFailure on any error. Empty results are NOT an error.
+
+            function startResultsRequest(inputedText, onSuccess, onFailure) {
+                onSuccess([]);
             }
-            this.addElement('list', listInstance);
 
-            this.addListEvents();
-            
-            this.addElement('field',
-                    new Meio.Element.Field(input, this.options.fieldOptions));
-            this.addFieldEvents();
-            
-            this.addSelectEvents();
-            
-            this.attach();
-            this.initCache();
-            this.initData(data);
-        },
-        
-        addFieldEvents: function () {
-            this.addEventsToElement('field', {
-                'beforeKeyrepeat': function (e) {
-                    this.active = 1;
-                    var e_key = e.key, list = this.elements.list;
-                    if (e_key == 'up' || e_key == 'down' ||
-                        (e_key == 'enter' && list.showing)) {
-                        e.preventDefault();
-                    }
+            The function stopResultsRequest is meant to cancel a request for
+                results that was started earlier.  If there is no request to
+                cancel then nothing will be done.
+
+            function stopResultsRequest() {}
+
+            */
+            this.setOptions(options);
+
+            // TODO: What does this really do ?
+            this.active = 0;
+
+            this.startResultsRequest = startResultsRequest;
+            this.stopResultsRequest = stopResultsRequest;
+
+            if (this.options.formatResult !== null) {
+                this.formatResult = this.options.formatResult;
+            }
+            if (this.options.formatTitle !== null) {
+                this.formatTitle = this.options.formatTitle;
+            }
+            if (this.options.formatContent !== null) {
+                this.formatContent = this.options.formatContent;
+            }
+
+            if (this.options.startSyncResultsRequest !== null) {
+                this.startSyncResultsRequest =
+                        this.options.startSyncResultsRequest;
+            } else {
+                this.startSyncResultsRequest = null;
+            }
+
+            // TODO: Do we REALLY need this ?
+            if (this.options.stopSyncResultsRequest !== null) {
+                this.stopSyncResultsRequest =
+                        this.options.stopSyncResultsRequest;
+            } else {
+                this.stopSyncResultsRequest = null;
+            }
+
+            // TODO: What does this do ?
+            this.keyPressControl = {};
+
+            // Initialize element pointers.
+            this.inputEl = null;
+            this.containerEl = null;
+            this.listEl = null;
+
+            // TODO: Figure out the rules for these.
+            this.inputedText = null;
+            this.oldInputedText = null;
+
+            // The list item which has focus placed on it.
+            this.focusedListItemEl = null;
+
+            // Last results fetched, used to feed result back to integrator.
+            this.results = null;
+
+            // This timer prevents a flood of key events.
+            this.keyrepeatTimer = null;
+
+            // Events of this class.
+            this.addEvents({
+                select: function (itemEl, result, resultIndex) {
+                    this.inputEl.addClass(this.options.classes.selected);
                 },
-                'delayedKeyrepeat': function (e) {
-                    var e_key = e.key, field = this.elements.field;
-                    field.keyPressControl[e_key] = true;
-                    switch (e_key) {
-                    case 'up':
-                    case 'down':
-                        this.focusItem(e_key);
-                        break;
-                    case 'enter':
-                        this.setInputValue();
-                        break;
-                    case 'tab':
-                        if (this.options.selectOnTab) {
+                deselect: function (itemEl, result, resultIndex) {
+                    this.inputEl.removeClass(this.options.classes.selected);
+                }
+            });
+
+            // Special event for IE weirdness.
+            window.addEvent('unload', (function () {
+                // if autocomplete is off when you reload the page the input
+                // value gets erased
+                if (this.inputEl !== null) {
+                    this.inputEl.set('autocomplete', 'on'); 
+                }
+            }).bind(this));
+
+            // Events for the list/container element.
+            this.listEvents = {
+                mouseover: function (e) {
+                    /* Mousing over a new list item should change the focuses
+                    list item. */
+                    var itemEl, hoverClass;
+                    itemEl = this.getItemFromEvent(e);
+                    hoverClass = this.options.classes.hover;
+                    if (!itemEl) {
+                        return true;
+                    }
+                    if (this.focusedListItemEl) {
+                        this.focusedListItemEl.removeClass(hoverClass);
+                    }
+                    itemEl.addClass(hoverClass);
+                    this.focusedListItemEl = itemEl;
+                    this.fireEvent('focusItem', [this.focusedListItemEl]);
+                },
+                mousedown: function (e) {
+                    /* Selecting a new 
+                   
+                    */
+                    e.preventDefault();
+                    this.shouldNotBlur = true;
+                    this.focusedListItemEl = this.getItemFromEvent(e);
+                    if (!this.focusedListItemEl) {
+                        return true;
+                    } else {
+                        if (this.active) {
                             this.setInputValue();
                         }
-                        // tab blurs the input so the keyup event wont happen
-                        // at the same input you made a keydown
-                        field.keyPressControl[e_key] = false; 
-                        break;
-                    case 'esc':
-                        this.elements.list.hide();
-                        break;
-                    default:
-                        this.setupList();
                     }
-                    this.oldInputedText = field.node.get('value');
-                },
+                    this.focusedListItemEl.removeClass(
+                            this.options.classes.hover);
+                }
+            };
+
+            // Events for the input element.
+            this.inputEvents = {
                 'keyup': function (e) {
-                    var field = this.elements.field;
                     if (!commandKeys[e.code]) {
-                        if (!field.keyPressControl[e.key]) {
+                        if (!this.keyPressControl[e.key]) {
                             this.setupList();
                         }
-                        field.keyPressControl[e.key] = false;
+                        this.keyPressControl[e.key] = false;
                     }
                 },
                 'focus': function () {
                     this.active = 1;
-                    var list = this.elements.list;
-                    list.focusedItem = null;
-                    list.positionNextTo(this.elements.field.node);
+                    this.focusedListItemEl = null;
+                    this.positionResultsContainer();
                 },
                 'click': function () {
                     this.active = this.active + 1;
-                    if (this.active > 2 && !this.elements.list.showing) {
+                    //TODO: Is this for double click ? It includes focus.
+                    if (this.active > 2 && !this.showing) {
                         this.forceSetupList();
                     }
                 },
                 'blur': function (e) {
                     this.active = 0;
-                    var list = this.elements.list;
-                    if (list.shouldNotBlur) {
-                        this.elements.field.node.setCaretPosition('end');
-                        list.shouldNotBlur = false;
-                        if (list.focusedItem) {
-                            list.hide();
+                    if (this.shouldNotBlur) {
+                        this.inputEl.setCaretPosition('end');
+                        this.shouldNotBlur = false;
+                        if (this.focusedListItemEl) {
+                            this.hide();
                         }
                     } else {
-                        list.hide();
+                        this.hide();
                     }
                 },
                 'paste': function () {
                     return this.setupList();
+                },
+                keyrepeat: function (e) {
+                    this.beforeKeyrepeat(e);
+                    this.keyrepeat(e);
                 }
-            });
-        },
-        
-        addListEvents: function () {
-            this.addEventsToElement('list', {
-                'mousedown': function (e) {
-                    if (this.active && !e.dontHide) {
-                        this.setInputValue();
+            };
+            
+            // ie6 only, uglyness
+            // this fix the form being submited on the press of the enter key
+            if (Browser.ie && Browser.version == 6) {
+                this.inputEvents.keypress = function (e) {
+                    if (e.key == 'enter') {
+                        this.keyrepeat(e);
                     }
+                };
+            }
+        },
+
+        attach: function (inputEl) {
+            var enteredText;
+            this.inputEl = inputEl;
+            this.inputEl.set('autocomplete', 'off');
+
+            this.buildList();
+            
+            Object.each(this.listEvents, function (handler, name, obj) {
+                obj[name] = handler.bind(this);
+                this.listEl.addEvent(name, obj[name]);
+            }, this);
+            Object.each(this.inputEvents, function (handler, name, obj) {
+                obj[name] = handler.bind(this);
+                this.inputEl.addEvent(name, obj[name]);
+            }, this);
+
+            if (this.startSyncResultsRequest !== null) {
+                enteredText = this.inputEl.get('value');
+                if (enteredText) {
+                    this.startSyncResultsRequest(enteredText,
+                            this.syncResultsRequestSuccess.bind(this),
+                            this.syncResultsRequestFailure.bind(this));
                 }
-            });
+            }
+        },
+
+        beforeKeyrepeat: function (e) {
+            //TODO: Why?
+            this.active = 1;
+            //TODO: Why?
+            if (e.key == 'up' || e.key == 'down' ||
+                (e.key == 'enter' && this.showing)) {
+                e.preventDefault();
+            }
         },
         
-        update: function () {
-            var data, list, cacheKey, cached, html, itemsHtml, itemsData,
-                    classes, text, filter, formatMatch, formatItem, row, i, n,
-                    cssClass;
-            data = this.data;
-            list = this.elements.list;
-            cacheKey = data.getKey();
-            cached = this.cache.get(cacheKey);
-            if (cached) {
-                html = cached.html;
-                this.itemsData = cached.data;
+        delayedKeyrepeat: function (e) {
+            // TODO: Why ?
+            var key = e.key;
+            this.keyPressControl[key] = true;
+            if (key == 'up' || key == 'down') {
+                if (this.showing) {
+                    // If the list is showing then,
+                    // move around in it.
+                    this.focusItem(key);
+                } else {
+                    // Otherwise show the list
+                    // THEN move around in it.
+                    this.forceSetupList();
+                    this.onUpdate = (function () {
+                        this.focusItem(key);
+                    }).bind(this);
+                }
+            } else if (key == 'enter') {
+                this.setInputValue();
+            } else if (key == 'tab') {
+                if (this.options.selectOnTab) {
+                    this.setInputValue();
+                }
+                // tab blurs the input so the keyup event wont happen
+                // at the same input you made a keydown
+                this.keyPressControl[key] = false;
+            } else if (key == 'esc') {
+                this.hide();
             } else {
-                data = data.get();
-                itemsHtml = [];
-                itemsData = [];
-                classes = list.options.classes;
-                text = this.inputedText;
-                filter = this.filters.filter;
-                formatMatch = this.filters.formatMatch;
-                formatItem = this.filters.formatItem;
-                for (i = 0, n = 0; i < data.length; i = i + 1) {
-                    row = data[i];
-                    if (filter.call(this, text, row)) {
-                        if (n % 2) {
-                            cssClass = classes.even;
-                        } else {
-                            cssClass = classes.odd;
-                        }
-                        itemsHtml.push(
-                            '<li title="',
-                            encode(formatMatch.call(this, text, row)),
-                            '" data-index="', n,
-                            '" class="',
-                            cssClass, '">',
-                            formatItem.call(this, text, row, n),
-                            '</li>'
-                        );
-                        itemsData.push(row);
-                        n = n + 1;
-                    }
+                this.setupList();
+            }
+            this.oldInputedText = this.inputEl.get('value');
+        },
+        
+        keyrepeat: function (e) {
+            /*
+            This function is called everytime a key is pressed. The input
+            element's value is not updated though until after this event so
+            we setup a timer to call another function so that the key can get
+            through and we can act on the final value.
+
+            We don't cancel the timeout because we would miss keys.
+            */
+            (function (e) {
+                this.delayedKeyrepeat(e);
+            }).delay(1, this, [e]);
+        },
+
+        syncResultsRequestSuccess: function (results) {
+            if (results.length === 0) {
+                this.inputEl.set('value', '');
+            } else {
+                this.inputEl.set('value', results[0].text);
+                this.oldInputedText = results[0].text;
+                this.focusedListItemEl = this.formatResult(
+                        this.inputEl.get('value'), results[0], 0);
+                this.fireEvent('select', [this.focusedListItemEl,
+                        this.results[0], 0]);
+                this.results = [results[0]];
+            }
+        },
+
+        syncResultsRequestFailure: function (failureDetails) {
+            this.inputEl.set('value', '');
+        },
+        
+        formatTitle: function (inputedText, result, resultIndex) {
+            return result.text;
+        },
+
+        formatContent: function (inputedText, result, resultIndex) {
+            return result.content;
+        },
+
+        formatResult: function (inputedText, result, resultIndex) {
+            var listItemEl, cssClass, title, content;
+            if (resultIndex % 2) {
+                cssClass = this.options.classes.even;
+            } else {
+                cssClass = this.options.classes.odd;
+            }
+            title = this.formatTitle(inputedText, result, resultIndex);
+            content = this.formatContent(inputedText, result, resultIndex);
+            listItemEl = new Element('li', {
+                'title': title,
+                'className': cssClass
+            });
+            if (typeOf(content === 'string')) {
+                listItemEl.set('html', content);
+            } else {
+                listItemEl.adopt(content);
+            }
+            listItemEl.store('resultIndex', resultIndex);
+            listItemEl.store('resultText', result.text);
+            return listItemEl;
+        },
+
+        formatResults: function (results) {
+            var i, resultEls;
+            resultEls = [];
+            for (i = 0; i < results.length; i = i + 1) {
+                resultEls.push(this.formatResult(this.inputedText,
+                        results[i], i));
+            }
+            return resultEls;
+        },
+
+        buildList: function () {
+            this.containerEl = new Element('div', {
+                'class': this.options.classes.container
+            });
+            if (Browser.ie && Browser.version == 6) {
+                this.shim = new IframeShim(this.containerEl, {
+                    top: 0,
+                    left: 0
+                });
+            }
+            this.listEl = new Element('ul');
+            this.listEl.inject(this.containerEl);
+            this.containerEl.inject(document.body, 'bottom');
+        },
+
+        applyMaxHeight: function () {
+            /*
+            Grab the last element in the list and use it to fix the height.
+            */
+            var lastChildIndex, lastChildEl, i;
+            if (this.options.maxVisibleItems !== null) {
+                lastChildIndex = this.options.maxVisibleItems - 1;
+            } else {
+                lastChildIndex = 0;
+            }
+            lastChildIndex = Math.min(lastChildIndex,
+                    this.listEl.getChildren().length - 1);
+            if (lastChildIndex >= 0) {
+                lastChildEl = this.listEl.getChildren()[lastChildIndex];
+                // uggly hack to fix the height of the autocomplete list
+                for (i = 0; i < 2; i = i + 1) {
+                    this.containerEl.setStyle('height',
+                            lastChildEl.getCoordinates(this.listEl).bottom);
                 }
-                html = itemsHtml.join('');
-                this.cache.set(cacheKey, {html: html, data: itemsData});
-                this.itemsData = itemsData;
             }
-            list.focusedItem = null;
-            this.fireEvent('deselect', [this.elements]);
-            list.list.set('html', html);
-            if (this.options.maxVisibleItems) {
-                list.applyMaxHeight(this.options.maxVisibleItems);
+        },
+
+        positionResultsContainer: function () {
+            var width, containerEl, fieldElPosition;
+            width = this.options.widthOfResultsContainer;
+            containerEl = this.containerEl;
+            if (width === null) {
+                width = this.inputEl.getWidth().toInt() -
+                        containerEl.getStyle('border-left-width').toInt() -
+                        containerEl.getStyle('border-right-width').toInt();
+
             }
+            containerEl.setStyle('width', width);
+            fieldElPosition = this.inputEl.getCoordinates();
+            containerEl.setPosition({
+                x: fieldElPosition.left,
+                y: fieldElPosition.bottom
+            });
+        },
+        
+        show: function () {
+            window.console.log('show');
+            this.containerEl.scrollTop = 0;
+            this.containerEl.setStyle('visibility', 'visible');
+            this.showing = true;
+        },
+        
+        hide: function () {
+            window.console.log('hide');
+            this.showing = false;
+            this.containerEl.setStyle('visibility', 'hidden');
         },
         
         setupList: function () {
-            this.inputedText = this.elements.field.node.get('value');
+            // What is the purpose of this value ?
+            this.inputedText = this.inputEl.get('value');
             if (this.inputedText !== this.oldInputedText) {
                 this.forceSetupList(this.inputedText);
             } else {
-                this.elements.list.hide();
+                window.console.log('setupList is hiding');
+                this.hide();
             }
             return true;
         },
         
         forceSetupList: function (inputedText) {
-            inputedText = inputedText || this.elements.field.node.get('value');
-            if (inputedText.length >= this.options.minChars) {
-                global.clearInterval(this.prepareTimer);
-                this.prepareTimer = this.data.prepare.delay(this.options.delay,
-                        this.data, this.inputedText);
+            this.inputedText = inputedText || this.inputEl.get('value');
+            if (this.inputedText.length >= this.options.minChars) {
+                this.stopResultsRequest();
+                this.stopRequestIndicator();
+                this.startRequestIndicator();
+                this.startResultsRequest(this.inputedText,
+                        this.resultsRequestSuccess.bind(this),
+                        this.resultsRequestFailure.bind(this));
             }
         },
+
+        resultsRequestFailure: function () {
+            // TODO: Do something realistic here.
+            this.resultsRequestSuccess([]);
+        },
+
+        stopRequestIndicator: function () {
+            this.inputEl.removeClass(this.options.classes.loading);
+        },
+
+        retrievedNoResults: function () {
+            window.console.log('retrievedNoResults');
+            this.inputEl.addClass(this.options.classes.empty);
+        },
+
+        retrievedSomeResults: function () {
+            window.console.log('retrievedSomeResults');
+            this.inputEl.removeClass(this.options.classes.empty);
+        },
+
+        startRequestIndicator: function () {
+            this.inputEl.addClass(this.options.classes.loading);
+        },
         
-        dataReady: function () {
-            this.update();
+        resultsRequestSuccess: function (results) {
+            window.console.log('resultsRequestSuccess', results);
+            this.stopRequestIndicator();
+            var resultIndex;
+            if (this.focusedListItemEl !== null) {
+                resultIndex = this.focusedListItemEl.retrieve('resultIndex');
+                this.fireEvent('deselect', [this.focusedListItemEl,
+                        this.results[resultIndex], resultIndex]);
+            }
+            this.results = results;
+            this.listEl.empty();
+            this.listEl.adopt(this.formatResults(results));
+            this.focusedListItemEl = null;
+            if (this.options.maxVisibleItems) {
+                this.applyMaxHeight();
+            }
+
             if (this.onUpdate) {
                 this.onUpdate();
                 this.onUpdate = null;
             }
-            var list = this.elements.list;
-            if (list.list.get('html')) {
+            if (this.listEl.getChildren().length > 0) {
+                this.retrievedSomeResults();
                 if (this.active) {
-                    list.show();
+                    this.show();
                 }
             } else {
-                this.fireEvent('noItemToList', [this.elements]);
-                list.hide();
+                this.retrievedNoResults();
+                this.hide();
             }
         },
         
         setInputValue: function () {
-            var list, text, index;
-            list = this.elements.list;
-            if (list.focusedItem) {
-                text = list.focusedItem.get('title');
-                this.elements.field.node.set('value', text);
-                index = list.focusedItem.get('data-index');
-                this.fireEvent('select',
-                        [this.elements, this.itemsData[index], text, index]);
+            /* Set the input value and hide the list. */
+            var resultIndex;
+            if (this.focusedListItemEl) {
+                this.inputEl.set('value',
+                        this.focusedListItemEl.retrieve('resultText'));
+                resultIndex = this.focusedListItemEl.retrieve('resultIndex');
+                this.fireEvent('select', [this.focusedListItemEl,
+                        this.results[resultIndex], resultIndex]);
             }
-            list.hide();
+            this.hide();
         },
         
         focusItem: function (direction) {
-            var list = this.elements.list;
-            if (list.showing) {
-                list.focusItem(direction);
-            } else {
-                this.forceSetupList();
-                this.onUpdate = function () {
-                    list.focusItem(direction);
-                };
-            }
-        },
-        
-        addSelectEvents: function () {
-            this.addEvents({
-                select: function (elements) {
-                    elements.field.addClass('selected');
-                },
-                deselect: function (elements) {
-                    elements.field.removeClass('selected');
-                }
-            });
-        },
-        
-        initData: function (data) {
-            if (typeOf(data) == 'string') {
-                this.data = new Meio.Autocomplete.Data.Request(data,
-                        this.cache, this.elements.field,
-                        this.options.requestOptions, this.options.urlOptions);
-            } else {
-                this.data = new Meio.Autocomplete.Data(data, this.cache);
-            }
-            this.data.addEvent('ready', this.dataReady.bind(this));
-        },
-        
-        initCache: function () {
-            var cacheLength = this.options.cacheLength;
-            if (this.options.cacheType == 'shared') {
-                this.cache = globalCache;
-                this.cache.setMaxLength(cacheLength);
-            } else { // 'own'
-                this.cache = new Meio.Autocomplete.Cache(cacheLength);
-            }
-        },
-        
-        refreshCache: function (cacheLength) {
-            this.cache.refresh();
-            this.cache.setMaxLength(cacheLength || this.options.cacheLength);
-        },
-        
-        refreshAll: function (cacheLength, urlOptions) {
-            // TODO, do you really need to refresh the url?
-            // find a better way of doing this
-            this.refreshCache(cacheLength);
-            this.data.refreshKey(urlOptions);
-        }
-
-    });
-    
-    // This is the same autocomplete class but it acts like a normal select
-    //  element.
-    // When you select an option from the autocomplete it will set the value
-    //  of a given element (valueField)
-    // with the return of the valueFilter.
-    // if the syncAtInit option is set to true, it will synchonize the value
-    //  of the autocomplete with the corresponding data
-    // from the valueField's value.
-    // to understand better see the user specs.
-    
-    Meio.Autocomplete.Select = new Class({
-        
-        Extends: Meio.Autocomplete,
-        
-        options: {
-            syncName: 'id', // if falsy it wont sync at start
-            valueField: null,
-            valueFilter: function (data) {
-                return data.id;
-            }
-        },
-        
-        // overwritten
-        initialize: function (input, data, options, listInstance) {
-            this.parent(input, data, options, listInstance);
-            this.valueField = $(this.options.valueField);
-            
-            if (!this.valueField) {
-                return;
-            }
-            
-            this.syncWithValueField(data);
-        },
-        
-        syncWithValueField: function (data) {
-            var value = this.getValueFromValueField();
-            
-            if (value && this.options.syncName) {
-                this.addParameter(data);
-                this.addDataReadyEvent(value);
-                this.data.prepare(this.elements.field.node.get('value'));
-            } else {
-                this.addValueFieldEvents();
-            }
-        },
-        
-        addValueFieldEvents: function () {
-            this.addEvents({
-                'select': function (elements, data) {
-                    this.valueField.set('value',
-                            this.options.valueFilter.call(this, data));
-                },
-                'deselect': function (elements) {
-                    this.valueField.set('value', '');
-                }
-            });
-        },
-        
-        addParameter: function (data) {
-            this.parameter = {
-                name: this.options.syncName,
-                value: function () {
-                    return this.valueField.value;
-                }.bind(this)
-            };
-            if (this.data.url) {
-                this.data.url.addParameter(this.parameter);
-            }
-        },
-        
-        addDataReadyEvent: function (value) {
-            var self, runOnce;
-            self = this;
-            runOnce = function () {
-                var values, i, text;
-                self.addValueFieldEvents();
-                values = this.get();
-                for (i = values.length; i >= 0; i = i - 1) {
-                    if (self.options.valueFilter.call(self, values[i]) ==
-                            value) {
-                        text = self.filters.formatMatch.call(self, '',
-                                values[i], 0);
-                        self.elements.field.node.set('value', text);
-                        self.fireEvent('select', [self.elements, values[i],
-                                text, i]);
-                        break;
+            window.console.log('focusItem', direction);
+            /* Focus on a list item. */
+            var hoverClass, newFocusedItemEl;
+            if (this.showing) {
+                hoverClass = this.options.classes.hover;
+                if (this.focusedListItemEl) {
+                    window.console.log('A list item was focused.');
+                    if (direction == 'up') {
+                        newFocusedItemEl = this.focusedListItemEl.getPrevious();
+                    } else {
+                        newFocusedItemEl = this.focusedListItemEl.getNext();
                     }
-                }
-                if (this.url) {
-                    this.url.removeParameter(self.parameter);
-                }
-                this.removeEvent('ready', runOnce);
-            };
-            this.data.addEvent('ready', runOnce);
-        },
-        
-        getValueFromValueField: function () {
-            return this.valueField.get('value');
-        }
-        
-    });
-    
-    // Transforms a select on an autocomplete field
-    
-    Meio.Autocomplete.Select.One = new Class({
-        
-        Extends: Meio.Autocomplete.Select,
-        
-        options: {
-            filter: {
-                // path to the text value on each object thats contained on the
-                // data array
-                path: 'text' 
-            }
-        },
-        
-        //overwritten
-        initialize: function (select, options, listInstance) {
-            this.select = $(select);
-            this.replaceSelect();
-            options = Object.merge(options || {}, {
-                valueField: this.select,
-                valueFilter: function (data) {
-                    return data.value;
-                }
-            });
-            this.parent(this.field, this.createDataArray(), options,
-                    listInstance);
-        },
-        
-        replaceSelect: function () {
-            var selectedOption, optionValue;
-            selectedOption = this.select.getSelected()[0];
-            this.field = new Element('input', {type: 'text'});
-            optionValue = selectedOption.get('value');
-            if (optionValue || optionValue === 0) {
-                this.field.set('value', selectedOption.get('html'));
-            }
-            this.select.setStyle('display', 'none');
-            this.field.inject(this.select, 'after');
-        },
-        
-        createDataArray: function () {
-            var selectOptions, i, data, selectOption, optionValue;
-            selectOptions = this.select.options;
-            data = [];
-            for (i = 0; i < selectOptions.length; i = i + 1) {
-                selectOption = selectOptions[i];
-                optionValue = selectOption.value;
-                if (optionValue || optionValue === 0) {
-                    data.push({
-                        value: optionValue,
-                        text: selectOption.innerHTML
-                    });
-                }
-            }
-            return data;
-        },
-        
-        addValueFieldEvents: function () {
-            this.addEvents({
-                'select': function (elements, data, text, index) {
-                    var option = this.valueField.getElement('option[value="' +
-                            this.options.valueFilter.call(this, data) + '"]');
-                    if (option) {
-                        option.selected = true;
+                    if (newFocusedItemEl) {
+                        this.focusedListItemEl.removeClass(hoverClass);
+                        newFocusedItemEl.addClass(hoverClass);
+                        this.focusedListItemEl = newFocusedItemEl;
+                        this.scrollFocusedItem(direction);
                     }
-                },
-                'deselect': function (elements) {
-                    var option = this.valueField.getSelected()[0];
-                    if (option) {
-                        option.selected = false;
-                    }
-                }
-            });
-        },
-        
-        getValueFromValueField: function () {
-            return this.valueField.getSelected()[0].get('value');
-        }
-        
-    });
-    
-    Meio.Element = new Class({
-        
-        Implements: [Events],
-        
-        initialize: function (node) {
-            this.setNode(node);
-            this.createBoundEvents();
-            this.attach();
-        },
-        
-        setNode: function (node) {
-            if (node) {
-                node = $(node);
-                if (!node) {
-                    node = document.getElement(node);
-                }
-            }
-            if (!node) {
-                node = this.render();
-            }
-            this.node = node;
-        },
-        
-        createBoundEvents: function () {
-            this.bound = {};
-            this.boundEvents.each(function (evt) {
-                this.bound[evt] = function (e) {
-                    this.fireEvent('before' + evt.capitalize(), e);
-                    if (this[evt]) {
-                        this[evt](e);
-                    }
-                    this.fireEvent(evt, e);
-                    return true;
-                }.bind(this);
-            }, this);
-        },
-        
-        attach: function () {
-            for (var e in this.bound) {
-                if (this.bound.hasOwnProperty(e)) {
-                    this.node.addEvent(e, this.bound[e]);
-                }
-            }
-        },
-        
-        detach: function () {
-            for (var e in this.bound) {
-                if (this.bound.hasOwnProperty(e)) {
-                    this.node.removeEvent(e, this.bound[e]);
-                }
-            }
-        },
-        
-        addClass: function (type) {
-            this.node.addClass(this.options.classes[type]);
-        },
-        
-        removeClass: function (type) {
-            this.node.removeClass(this.options.classes[type]);
-        },
-        
-        toElement: function () {
-            return this.node;
-        },
-        
-        render: function () {}
-        
-    });
-
-    Meio.Element.Field = new Class({
-        
-        Extends: Meio.Element,
-        
-        Implements: [Options],
-        
-        options: {
-            classes: {
-                loading: 'ma-loading',
-                selected: 'ma-selected'
-            }
-        },
-        
-        initialize: function (field, options) {
-            this.keyPressControl = {};
-            this.boundEvents = ['paste', 'focus', 'blur', 'click', 'keyup',
-                    'keyrepeat'];
-            // yeah super ugly, but what can be awesome with ie?
-            if (browser.ie6) {
-                this.boundEvents.push('keypress');
-            }
-            this.setOptions(options);
-            this.parent(field);
-            
-            $(global).addEvent('unload', function () {
-                // if autocomplete is off when you reload the page the input
-                // value gets erased
-                if (this.node) {
-                    this.node.set('autocomplete', 'on');
-                }
-            }.bind(this));
-        },
-        
-        setNode: function (element) {
-            this.parent(element);
-            this.node.set('autocomplete', 'off');
-        },
-        
-        // this let me get the value of the input on keydown and keypress
-        keyrepeat: function (e) {
-            global.clearInterval(this.keyrepeatTimer);
-            this.keyrepeatTimer = this.privateKeyrepeat.delay(1, this, e);
-        },
-        
-        privateKeyrepeat: function (e) {
-            this.fireEvent('delayedKeyrepeat', e);
-        },
-        
-        destroy: function () {
-            this.detach();
-            this.node.removeAttribute('autocomplete');
-        },
-        
-        // ie6 only, uglyness
-        // this fix the form being submited on the press of the enter key
-        keypress: function (e) {
-            if (e.key == 'enter') {
-                this.bound.keyrepeat(e);
-            }
-        }
-        
-    });
-
-    Meio.Element.List = new Class({
-        
-        Extends: Meio.Element,
-        
-        Implements: [Options],
-        
-        options: {
-            // you can pass any other value settable by set('width') to the
-            // list container
-            width: 'field', 
-            classes: {
-                container: 'ma-container',
-                hover: 'ma-hover',
-                odd: 'ma-odd',
-                even: 'ma-even'
-            }
-        },
-        
-        initialize: function (options) {
-            this.boundEvents = ['mousedown', 'mouseover'];
-            this.setOptions(options);
-            this.parent();
-            this.focusedItem = null;
-        },
-        
-        applyMaxHeight: function (maxVisibleItems) {
-            var listChildren, node, i;
-            listChildren = this.list.childNodes;
-            node = null;
-            // TODO: Remove possible accesses to undefined portions of array.
-            if (listChildren[maxVisibleItems - 1]) {
-                node = listChildren[maxVisibleItems - 1];
-            } else if (listChildren.length) {
-                node = listChildren[listChildren.length - 1];
-            }
-            if (!node) {
-                return;
-            }
-            node = $(node);
-            // uggly hack to fix the height of the autocomplete list
-            for (i = 2; i >= 0; i = i - 1) {
-                this.node.setStyle('height',
-                        node.getCoordinates(this.list).bottom);
-            }
-        },
-        
-        mouseover: function (e) {
-            var item, hoverClass;
-            item = this.getItemFromEvent(e);
-            hoverClass = this.options.classes.hover;
-            if (!item) {
-                return true;
-            }
-            if (this.focusedItem) {
-                this.focusedItem.removeClass(hoverClass);
-            }
-            item.addClass(hoverClass);
-            this.focusedItem = item;
-            this.fireEvent('focusItem', [this.focusedItem]);
-        },
-        
-        mousedown: function (e) {
-            e.preventDefault();
-            this.shouldNotBlur = true;
-            if (!(this.focusedItem = this.getItemFromEvent(e))) {
-                e.dontHide = true;
-                return true;
-            } 
-            this.focusedItem.removeClass(this.options.classes.hover);
-        },
-        
-        focusItem: function (direction) {
-            var hoverClass, newFocusedItem;
-            hoverClass = this.options.classes.hover;
-            if (this.focusedItem) {
-                if (direction == 'up') {
-                    newFocusedItem = this.focusedItem.getPrevious();
                 } else {
-                    newFocusedItem = this.focusedItem.getNext();
-                }
-                if (newFocusedItem) {
-                    this.focusedItem.removeClass(hoverClass);
-                    newFocusedItem.addClass(hoverClass);
-                    this.focusedItem = newFocusedItem;
-                    this.scrollFocusedItem(direction);
-                }
-            } else {
-                newFocusedItem = this.list.getFirst();
-                if (newFocusedItem) {
-                    newFocusedItem.addClass(hoverClass);
-                    this.focusedItem = newFocusedItem;
+                    // Both up and down go to the first item.
+                    newFocusedItemEl = this.listEl.getFirst();
+                    if (newFocusedItemEl) {
+                        newFocusedItemEl.addClass(hoverClass);
+                        this.focusedListItemEl = newFocusedItemEl;
+                    }
                 }
             }
         },
         
         scrollFocusedItem: function (direction) {
-            var focusedItemCoordinates, delta, top, scrollTop;
+            /* If less results are displayed then exist then when moving from
+            the bottom item to the next item with the keyboard requires that
+            the div is manually scrolled.
+            */
+            window.console.log('scrollFocusedItem', direction);
+            var focusedItemCoordinates, delta, top, scroll;
             focusedItemCoordinates =
-                    this.focusedItem.getCoordinates(this.list);
-            scrollTop = this.node.scrollTop;
+                    this.focusedListItemEl.getCoordinates(this.listEl);
+            scroll = this.containerEl.getScroll();
             if (direction == 'down') {
                 delta = focusedItemCoordinates.bottom -
-                        this.node.getStyle('height').toInt();
-                if ((delta - scrollTop) > 0) {
-                    this.node.scrollTop = delta;
+                        this.containerEl.getStyle('height').toInt();
+                if ((delta - scroll.y) > 0) {
+                    this.containerEl.scrollTo(0, delta);
                 }
             } else {
                 top = focusedItemCoordinates.top;
-                if (scrollTop && scrollTop > top) {
-                    this.node.scrollTop = top;
+                window.console.log('top of focusedItem is ', top);
+                if (scroll.y && scroll.y > top) {
+                    this.containerEl.scrollTo(0, top);
                 }
             }
         },
         
         getItemFromEvent: function (e) {
+            /* Extract the affected list item element from the event. */
             var target = e.target;
             while (target && target.tagName.toLowerCase() != 'li') {
-                if (target === this.node) {
+                if (target === this.containerEl) {
                     return null;
                 }
-                target = target.parentNode;
+                target = target.getParent();
             }
+            // TODO: Do we need to wrap this in $ ?
             return $(target);
-        },
-        
-        render: function () {
-            var node = new Element('div', {
-                'class': this.options.classes.container
-            });
-            if (Browser.ie && Browser.version == 6) {
-                this.shim = new IframeShim(node, {
-                    top: 0,
-                    left: 0
-                });
-            }
-            this.list = new Element('ul').inject(node);
-            $(document.body).grab(node);
-            return node;
-        },
-        
-        positionNextTo: function (fieldNode) {
-            var width, listNode, elPosition;
-            width = this.options.width;
-            listNode = this.node;
-            elPosition = fieldNode.getCoordinates();
-            if (width == 'field') {
-                width = fieldNode.getWidth().toInt() -
-                        listNode.getStyle('border-left-width').toInt() -
-                        listNode.getStyle('border-right-width').toInt();
+        }
+    });
 
-            }
-            listNode.setStyle('width', width);
-            listNode.setPosition({
-                x: elPosition.left,
-                y: elPosition.bottom
-            });
-        },
-        
-        show: function () {
-            this.node.scrollTop = 0;
-            this.node.setStyle('visibility', 'visible');
-            this.showing = true;
-        },
-        
-        hide: function () {
-            this.showing = false;
-            this.node.setStyle('visibility', 'hidden');
-        }
-        
-    });
-    
-    Meio.Autocomplete.Filter = {
-        
-        filters: {},
-        
-        get: function (options) {
-            var type, keys, filters;
-            type = options.type;
-            keys = (options.path || '').split('.');
-            if (type && this.filters[type]) {
-                filters = this.filters[type](this, keys);
-            } else {
-                filters = options;
-            }
-            return Object.merge(this.defaults(keys), filters);
-        },
-        
-        define: function (name, options) {
-            this.filters[name] = options;
-        },
-        
-        defaults: function (keys) {
-            var self = this;
-            return {
-                filter: function (text, data) {
-                    if (text) {
-                        return self.privateGetValueFromKeys(data, keys).test(
-                                new RegExp(text.escapeRegExp(), 'i'));
-                    } else {
-                        return true;
-                    }
-                },
-                formatMatch: function (text, data) {
-                    return self.privateGetValueFromKeys(data, keys);
-                },
-                formatItem: function (text, data, i) {
-                    if (text) {
-                        return self.privateGetValueFromKeys(data, keys).replace(
-                                new RegExp('(' + text.escapeRegExp() + ')',
-                                'gi'), '<strong>$1</strong>');
-                    } else {
-                        return self.privateGetValueFromKeys(data, keys);
-                    }
-                }
-            };
-        },
-        
-        privateGetValueFromKeys: function (value, keys) {
-            var key, i;
-            for (i = 0; i < keys.length; i = i + 1) {
-                value = value[keys[i]];
-            }
-            return value;
-        }
-        
-    };
-    
-    Meio.Autocomplete.Filter.define('contains', function (self, keys) {
-        return {};
-    });
-    Meio.Autocomplete.Filter.define('startswith', function (self, keys) {
-        return {
-            filter: function (text, data) {
-                if (text) {
-                    return self.privateGetValueFromKeys(data, keys).test(
-                            new RegExp('^' + text.escapeRegExp(), 'i'));
-                } else {
-                    return true;
-                }
-            }
+    if (window.hasOwnProperty('Meio')) {
+        window.Meio.Autocomplete = Autocomplete;
+    } else {
+        window.Meio = {
+            Autocomplete: Autocomplete
         };
-    });
+    }
     
-    Meio.Autocomplete.Data = new Class({
-        
-        Implements: [Options, Events],
-        
-        initialize: function (data, cache) {
-            this.privateCache = cache;
-            this.data = data;
-            this.dataString = JSON.encode(this.data);
-        },
-        
-        get: function () {
-            return this.data;
-        },
-        
-        getKey: function () {
-            return this.cachedKey;
-        },
-        
-        prepare: function (text) {
-            this.cachedKey = this.dataString + (text || '');
-            this.fireEvent('ready');
-        },
-        
-        cache: function (key, data) {
-            this.privateCache.set(key, data);
-        },
-        
-        refreshKey: function () {}
-        
-    });
-    
-    Meio.Autocomplete.Data.Request = new Class({
-        
-        Extends: Meio.Autocomplete.Data,
-        
-        options: {
-            noCache: true,
-            formatResponse: function (jsonResponse) {
-                return jsonResponse;
-            }
-        },
-        
-        initialize: function (url, cache, element, options, urlOptions) {
-            this.setOptions(options);
-            this.rawUrl = url;
-            this.privateCache = cache;
-            this.element = element;
-            this.urlOptions = urlOptions;
-            this.refreshKey();
-            this.createRequest();
-        },
-        
-        prepare: function (text) {
-            this.cachedKey = this.url.evaluate(text);
-            if (this.privateCache.has(this.cachedKey)) {
-                this.fireEvent('ready');
-            } else {
-                this.request.send({url: this.cachedKey});
-            }
-        },
-        
-        createRequest: function () {
-            var self = this;
-            this.request = new Request.JSON(this.options);
-            this.request.addEvents({
-                request: function () {
-                    self.element.addClass('loading');
-                },
-                complete: function () {
-                    self.element.removeClass('loading');
-                },
-                success: function (jsonResponse) {
-                    self.data = self.options.formatResponse(jsonResponse);
-                    self.fireEvent('ready');
-                }
-            });
-        },
-        
-        refreshKey: function (urlOptions) {
-            urlOptions = Object.merge(this.urlOptions, {
-                url: this.rawUrl
-            }, urlOptions || {});
-            this.url = new Meio.Autocomplete.Data.Request.URL(urlOptions.url,
-                    urlOptions);
-        }
-        
-    });
-    
-    Meio.Autocomplete.Data.Request.URL = new Class({
-        
-        Implements: [Options],
-        
-        options: {
-            queryVarName: 'q',
-            extraParams: null,
-            max: 20
-        },
-        
-        initialize: function (url, options) {
-            var params, i;
-            this.setOptions(options);
-            this.rawUrl = url;
-            this.url = url;
-            if (this.url.contains('?')) {
-                this.url +=  '&';
-            } else {
-                this.url += '?';
-            }
-            
-            this.dynamicExtraParams = [];
-            params = Array.from(this.options.extraParams);
-            for (i = params.length - 1; i >= 0; i = i - 1) {
-                this.addParameter(params[i]);
-            }
-            if (this.options.max) {
-                this.addParameter('limit=' + this.options.max);
-            }
-        },
-        
-        evaluate: function (text) {
-            var params, i, url;
-            text = text || '';
-            params = this.dynamicExtraParams;
-            url = [];
-            url.push(this.options.queryVarName + '=' +
-                     encodeURIComponent(text));
-            for (i = params.length - 1; i >= 0; i = i - 1) {
-                url.push(encodeURIComponent(params[i].name) + '=' +
-                        encodeURIComponent(Function.from(params[i].value)()));
-            }
-            return this.url + url.join('&');
-        },
-        
-        addParameter: function (param) {
-            if (param.nodeType == 1 || typeOf(param.value) == 'function') {
-                this.dynamicExtraParams.push(param);
-            } else {
-                if (typeOf(param) != 'string') {
-                    param = encodeURIComponent(param.name) + '=' +
-                            encodeURIComponent(param.value);
-                }
-                this.url += param + '&';
-            }
-        },
-        
-        // TODO remove non dynamic parameters
-        removeParameter: function (param) {
-            this.dynamicExtraParams.erase(param);
-        }
-        
-    });
-    
-    Meio.Autocomplete.Cache = new Class({
-        
-        initialize: function (maxLength) {
-            this.refresh();
-            this.setMaxLength(maxLength);
-        },
-        
-        set: function (key, value) {
-            if (!this.cache[key]) {
-                if (this.getLength() >= this.maxLength) {
-                    var keyToRemove = this.pos.shift();
-                    this.cache[keyToRemove] = null;
-                    delete this.cache[keyToRemove];
-                }
-                this.cache[key] = value;
-                this.pos.push(key);
-            }
-            return this;
-        },
-        
-        get: function (key) {
-            return this.cache[key || ''] || null;
-        },
-        
-        has: function (key) {
-            return !!this.get(key);
-        },
-        
-        getLength: function () {
-            return this.pos.length;
-        },
-        
-        refresh: function () {
-            this.cache = {};
-            this.pos = [];
-        },
-        
-        setMaxLength: function (maxLength) {
-            this.maxLength = Math.max(maxLength, 1);
-        }
-        
-    });
-    
-    globalCache = new Meio.Autocomplete.Cache();
-    
-    global.Meio = Meio;
-    
-})(this, document.id || $);
+})(document.id || $);
