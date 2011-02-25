@@ -330,12 +330,12 @@ changes:
                     this.setupList();
                 }
             }
-            /* Paste event varies between browsers. 
+            /* Paste event varies between browsers. */
             if (Browser.opera || (Browser.firefox && Browser.version < 3)) {
                 this.inputEvents.input = paste;
             } else {
                 this.inputEvents.paste = paste;
-            }*/
+            }
             
             // ie6 only, uglyness
             // this fix the form being submited on the press of the enter key
