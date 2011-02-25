@@ -202,7 +202,7 @@ changes:
             // Events for the list/container element.
             this.listEvents = {
                 mouseover: function (e) {
-                    /* Mousing over a new list item should change the focuses
+                    /* Mousing over a new list item should change the focused
                     list item. */
                     var itemEl, hoverClass;
                     itemEl = this.getItemFromEvent(e);
@@ -218,6 +218,7 @@ changes:
                     this.fireEvent('focusItem', [this.focusedListItemEl]);
                 },
                 mousedown: function (e) {
+                    /* Select the focused list item. */
                     e.preventDefault();
                     this.shouldNotBlur = true;
                     this.focusedListItemEl = this.getItemFromEvent(e);
@@ -227,9 +228,9 @@ changes:
                         if (this.active) {
                             this.selectFocusedListItem();
                         }
+                        this.focusedListItemEl.removeClass(
+                                this.options.classes.hover);
                     }
-                    this.focusedListItemEl.removeClass(
-                            this.options.classes.hover);
                 }
             };
 
@@ -322,6 +323,7 @@ changes:
             };
 
             function paste() {
+                /* Handle paste event. */
                 var valueEntered;
                 valueEntered = this.inputEl.get('value');
                 if (this.lastValueEntered !== valueEntered) {
