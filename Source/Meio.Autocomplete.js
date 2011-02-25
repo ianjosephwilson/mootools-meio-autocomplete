@@ -341,8 +341,9 @@ changes:
             // this fix the form being submited on the press of the enter key
             if (Browser.ie && Browser.version == 6) {
                 this.inputEvents.keypress = function (e) {
-                    if (e.key == 'enter') {
-                        this.keydown(e);
+                    if (e.key == 'enter' && this.showing) {
+                        e.preventDefault();
+                        this.selectFocusedListItem();
                     }
                 };
             }
