@@ -30,36 +30,6 @@ changes:
 (function ($) {
     var commandKeys, Autocomplete;
 
-    // Custom Events
-
-    // thanks Jan Kassens
-    Object.append(Element.NativeEvents, {
-        'paste': 2,
-        'input': 2
-    });
-
-    Element.Events.paste = {
-        condition: function (e) {
-            this.fireEvent('paste', e, 1);
-            return false;
-        }
-    };
-    if (Browser.opera || (Browser.firefox && Browser.version < 3)) {
-        Element.Events.paste.base = 'input';
-    } else {
-        Element.Events.paste.base = 'paste';
-    }
-    
-    // the key event that repeats
-    Element.Events.keyrepeat = {
-        condition: Function.from(true)
-    };
-    if (Browser.firefox || Browser.opera) {
-        Element.Events.keyrepeat.base = 'keypress';
-    } else {
-        Element.Events.keyrepeat.base = 'keydown';
-    }
-
     commandKeys = {
         9:   1,  // tab
         16:  1,  // shift
@@ -77,6 +47,9 @@ changes:
         Implements: [Options, Events],
         
         options: {
+            // The minimum number of characters that will trigger a
+            // request for results.
+            minChars: 0,
             // Width of the container for the results.
             // If no value is given then width is retrieved from input element.
             widthOfResultsContainer: null,
@@ -90,8 +63,6 @@ changes:
                 loading: 'ma-loading',
                 empty: 'ma-empty'
             },
-            // The minimum number of chars to cause a request for results.
-            minChars: 0,
             // True if the tab key should cause the list item with focus to
             //      be selected.
             selectOnTab: true,
@@ -131,9 +102,11 @@ changes:
             //     to cancel then nothing will be done.
             //
             // function stopSyncResultsRequest() {}
-            stopSyncResultsRequest: null
+            stopSyncResultsRequest: null,
+            // Number of milliseconds to wait after the input has changed to
+            // start a request for results.
+            requestDelay: 100
         },
-        
         initialize: function (startResultsRequest, stopResultsRequest,
                 options) {
             /*
@@ -155,8 +128,12 @@ changes:
             */
             this.setOptions(options);
 
-            // TODO: What does this really do ?
-            this.active = 0;
+            // True when the autocomplete's text input is in focus.
+            this.active = false;
+
+            // Number of times the field element has been clicked while
+            // active.
+            this.activeClicks = 0;
 
             this.startResultsRequest = startResultsRequest;
             this.stopResultsRequest = stopResultsRequest;
@@ -186,35 +163,31 @@ changes:
                 this.stopSyncResultsRequest = null;
             }
 
-            // TODO: What does this do ?
-            this.keyPressControl = {};
-
             // Initialize element pointers.
             this.inputEl = null;
             this.containerEl = null;
             this.listEl = null;
 
-            // TODO: Figure out the rules for these.
-            this.inputedText = null;
-            this.oldInputedText = null;
-
             // The list item which has focus placed on it.
             this.focusedListItemEl = null;
+
+            // The list item which is selected.
+            this.selectedListItemEl = null;
 
             // Last results fetched, used to feed result back to integrator.
             this.results = null;
 
-            // This timer prevents a flood of key events.
-            this.keyrepeatTimer = null;
+            // Timer for delayed start of request.
+            this.requestTimer = null;
 
+            // The last value that was entered into the text box.
+            this.lastValueEntered = null;
+
+            // True if blur should not occur when we have a list item in focus.
+            this.shouldNotBlur = false;
+            
             // Events of this class.
             this.addEvents({
-                select: function (itemEl, result, resultIndex) {
-                    this.inputEl.addClass(this.options.classes.selected);
-                },
-                deselect: function (itemEl, result, resultIndex) {
-                    this.inputEl.removeClass(this.options.classes.selected);
-                }
             });
 
             // Special event for IE weirdness.
@@ -222,7 +195,7 @@ changes:
                 // if autocomplete is off when you reload the page the input
                 // value gets erased
                 if (this.inputEl !== null) {
-                    this.inputEl.set('autocomplete', 'on'); 
+                    this.inputEl.set('autocomplete', 'on');
                 }
             }).bind(this));
 
@@ -245,9 +218,6 @@ changes:
                     this.fireEvent('focusItem', [this.focusedListItemEl]);
                 },
                 mousedown: function (e) {
-                    /* Selecting a new 
-                   
-                    */
                     e.preventDefault();
                     this.shouldNotBlur = true;
                     this.focusedListItemEl = this.getItemFromEvent(e);
@@ -255,7 +225,7 @@ changes:
                         return true;
                     } else {
                         if (this.active) {
-                            this.setInputValue();
+                            this.selectFocusedListItem();
                         }
                     }
                     this.focusedListItemEl.removeClass(
@@ -265,28 +235,80 @@ changes:
 
             // Events for the input element.
             this.inputEvents = {
-                'keyup': function (e) {
-                    if (!commandKeys[e.code]) {
-                        if (!this.keyPressControl[e.key]) {
+                keydown: function (e) {
+                    /* Act on command keys. */
+                    var key = e.key;
+                    
+                    // A key press clears all prior clicks.
+                    this.activeClicks = 0;
+
+                    // Stop these keys because they act on the results.
+                    if (e.key == 'up' || e.key == 'down' ||
+                        (e.key == 'enter' && this.showing)) {
+                        // TODO: This might not work in all browsers,
+                        // in which case the form might be submitted.
+                        e.preventDefault();
+                    }
+                    if (key == 'up' || key == 'down') {
+                        if (this.showing) {
+                            // If the list is showing then,
+                            // move around in it.
+                            this.focusItem(key);
+                        } else {
+                            // Otherwise show the list
+                            // THEN move around in it.
                             this.setupList();
+                            this.onUpdate = (function () {
+                                this.focusItem(key);
+                            }).bind(this);
                         }
-                        this.keyPressControl[e.key] = false;
+                    } else if (key == 'enter') {
+                        this.selectFocusedListItem();
+                    } else if (key == 'tab') {
+                        if (this.options.selectOnTab) {
+                            this.selectFocusedListItem();
+                        }
+                    } else if (key == 'esc') {
+                        this.hide();
                     }
                 },
-                'focus': function () {
-                    this.active = 1;
+                keyup: function (e) {
+                    /* Start a request if the key was not a command key. */
+                    var valueEntered;
+                    if (!commandKeys[e.code] && e.key !== 'enter') {
+                        valueEntered = this.inputEl.get('value');
+                        if (this.lastValueEntered !== valueEntered) {
+                            this.lastValueEntered = valueEntered;
+                            this.deselect();
+                            if (this.requestTimer !== null) {
+                                window.clearTimeout(this.requestTimer);
+                            }
+                            this.requestTimer = (function () {
+                                this.requestTimer = null;
+                                this.setupList();
+                            }).delay(this.options.requestDelay, this);
+                        }
+                    }
+                },
+                focus: function () {
+                    /* Focus on the input field. */
+                    this.active = true;
                     this.focusedListItemEl = null;
                     this.positionResultsContainer();
                 },
                 'click': function () {
-                    this.active = this.active + 1;
-                    //TODO: Is this for double click ? It includes focus.
-                    if (this.active > 2 && !this.showing) {
-                        this.forceSetupList();
+                    /* Count active clicks on the input field. */
+                    if (this.active) {
+                        this.activeClicks = this.activeClicks + 1;
+                    }
+                    if (this.active && this.activeClicks >= 2 &&
+                            !this.showing) {
+                        this.setupList();
                     }
                 },
                 'blur': function (e) {
-                    this.active = 0;
+                    this.active = false;
+                    this.activeClicks = 0;
                     if (this.shouldNotBlur) {
                         this.inputEl.setCaretPosition('end');
                         this.shouldNotBlur = false;
@@ -296,27 +318,35 @@ changes:
                     } else {
                         this.hide();
                     }
-                },
-                'paste': function () {
-                    return this.setupList();
-                },
-                keyrepeat: function (e) {
-                    this.beforeKeyrepeat(e);
-                    this.keyrepeat(e);
                 }
             };
+
+            function paste() {
+                var valueEntered;
+                valueEntered = this.inputEl.get('value');
+                if (this.lastValueEntered !== valueEntered) {
+                    this.lastValueEntered = valueEntered;
+                    this.deselect();
+                    this.setupList();
+                }
+            }
+            /* Paste event varies between browsers. 
+            if (Browser.opera || (Browser.firefox && Browser.version < 3)) {
+                this.inputEvents.input = paste;
+            } else {
+                this.inputEvents.paste = paste;
+            }*/
             
             // ie6 only, uglyness
             // this fix the form being submited on the press of the enter key
             if (Browser.ie && Browser.version == 6) {
                 this.inputEvents.keypress = function (e) {
                     if (e.key == 'enter') {
-                        this.keyrepeat(e);
+                        this.keydown(e);
                     }
                 };
             }
         },
-
         attach: function (inputEl) {
             var enteredText;
             this.inputEl = inputEl;
@@ -342,91 +372,45 @@ changes:
                 }
             }
         },
-
-        beforeKeyrepeat: function (e) {
-            //TODO: Why?
-            this.active = 1;
-            //TODO: Why?
-            if (e.key == 'up' || e.key == 'down' ||
-                (e.key == 'enter' && this.showing)) {
-                e.preventDefault();
+        select: function (selectedResult, selectedResultIndex) {
+            /* Select a result .*/
+            if (this.selectedResult !== null) {
+                this.deselect();
+            }
+            this.selectedResult = selectedResult;
+            this.selectedResultIndex = selectedResultIndex;
+            this.fireEvent('select', [selectedResult, selectedResultIndex]);
+            this.inputEl.addClass(this.options.classes.selected);
+        },
+        deselect: function () {
+            /* Deselect a result. */
+            if (this.selectedResult !== null) {
+                this.inputEl.removeClass(this.options.classes.selected);
+                this.fireEvent('deselect', [this.selectedResult,
+                        this.selectedResultIndex]);
+                this.selectedResult = null;
+                this.selectedResultIndex = null;
             }
         },
-        
-        delayedKeyrepeat: function (e) {
-            // TODO: Why ?
-            var key = e.key;
-            this.keyPressControl[key] = true;
-            if (key == 'up' || key == 'down') {
-                if (this.showing) {
-                    // If the list is showing then,
-                    // move around in it.
-                    this.focusItem(key);
-                } else {
-                    // Otherwise show the list
-                    // THEN move around in it.
-                    this.forceSetupList();
-                    this.onUpdate = (function () {
-                        this.focusItem(key);
-                    }).bind(this);
-                }
-            } else if (key == 'enter') {
-                this.setInputValue();
-            } else if (key == 'tab') {
-                if (this.options.selectOnTab) {
-                    this.setInputValue();
-                }
-                // tab blurs the input so the keyup event wont happen
-                // at the same input you made a keydown
-                this.keyPressControl[key] = false;
-            } else if (key == 'esc') {
-                this.hide();
-            } else {
-                this.setupList();
-            }
-            this.oldInputedText = this.inputEl.get('value');
-        },
-        
-        keyrepeat: function (e) {
-            /*
-            This function is called everytime a key is pressed. The input
-            element's value is not updated though until after this event so
-            we setup a timer to call another function so that the key can get
-            through and we can act on the final value.
-
-            We don't cancel the timeout because we would miss keys.
-            */
-            (function (e) {
-                this.delayedKeyrepeat(e);
-            }).delay(1, this, [e]);
-        },
-
         syncResultsRequestSuccess: function (results) {
             if (results.length === 0) {
                 this.inputEl.set('value', '');
             } else {
                 this.inputEl.set('value', results[0].text);
-                this.oldInputedText = results[0].text;
-                this.focusedListItemEl = this.formatResult(
-                        this.inputEl.get('value'), results[0], 0);
-                this.fireEvent('select', [this.focusedListItemEl,
-                        this.results[0], 0]);
+                this.lastEnteredText = results[0].text;
+                this.select(results[0], 0);
                 this.results = [results[0]];
             }
         },
-
         syncResultsRequestFailure: function (failureDetails) {
             this.inputEl.set('value', '');
         },
-        
         formatTitle: function (inputedText, result, resultIndex) {
             return result.text;
         },
-
         formatContent: function (inputedText, result, resultIndex) {
             return result.content;
         },
-
         formatResult: function (inputedText, result, resultIndex) {
             var listItemEl, cssClass, title, content;
             if (resultIndex % 2) {
@@ -449,17 +433,15 @@ changes:
             listItemEl.store('resultText', result.text);
             return listItemEl;
         },
-
         formatResults: function (results) {
             var i, resultEls;
             resultEls = [];
             for (i = 0; i < results.length; i = i + 1) {
-                resultEls.push(this.formatResult(this.inputedText,
+                resultEls.push(this.formatResult(this.lastValueEntered,
                         results[i], i));
             }
             return resultEls;
         },
-
         buildList: function () {
             this.containerEl = new Element('div', {
                 'class': this.options.classes.container
@@ -474,7 +456,6 @@ changes:
             this.listEl.inject(this.containerEl);
             this.containerEl.inject(document.body, 'bottom');
         },
-
         applyMaxHeight: function () {
             /*
             Grab the last element in the list and use it to fix the height.
@@ -496,7 +477,6 @@ changes:
                 }
             }
         },
-
         positionResultsContainer: function () {
             var width, containerEl, fieldElPosition;
             width = this.options.widthOfResultsContainer;
@@ -514,76 +494,43 @@ changes:
                 y: fieldElPosition.bottom
             });
         },
-        
         show: function () {
-            window.console.log('show');
             this.containerEl.scrollTop = 0;
             this.containerEl.setStyle('visibility', 'visible');
             this.showing = true;
         },
-        
         hide: function () {
-            window.console.log('hide');
             this.showing = false;
             this.containerEl.setStyle('visibility', 'hidden');
         },
-        
         setupList: function () {
-            // What is the purpose of this value ?
-            this.inputedText = this.inputEl.get('value');
-            if (this.inputedText !== this.oldInputedText) {
-                this.forceSetupList(this.inputedText);
-            } else {
-                window.console.log('setupList is hiding');
-                this.hide();
-            }
-            return true;
-        },
-        
-        forceSetupList: function (inputedText) {
-            this.inputedText = inputedText || this.inputEl.get('value');
-            if (this.inputedText.length >= this.options.minChars) {
+            if (this.lastValueEntered.length >= this.options.minChars) {
                 this.stopResultsRequest();
                 this.stopRequestIndicator();
                 this.startRequestIndicator();
-                this.startResultsRequest(this.inputedText,
+                this.startResultsRequest(this.lastValueEntered,
                         this.resultsRequestSuccess.bind(this),
                         this.resultsRequestFailure.bind(this));
             }
         },
-
         resultsRequestFailure: function () {
             // TODO: Do something realistic here.
             this.resultsRequestSuccess([]);
         },
-
         stopRequestIndicator: function () {
             this.inputEl.removeClass(this.options.classes.loading);
         },
-
         retrievedNoResults: function () {
-            window.console.log('retrievedNoResults');
             this.inputEl.addClass(this.options.classes.empty);
         },
-
         retrievedSomeResults: function () {
-            window.console.log('retrievedSomeResults');
             this.inputEl.removeClass(this.options.classes.empty);
         },
-
         startRequestIndicator: function () {
             this.inputEl.addClass(this.options.classes.loading);
         },
-        
         resultsRequestSuccess: function (results) {
-            window.console.log('resultsRequestSuccess', results);
             this.stopRequestIndicator();
-            var resultIndex;
-            if (this.focusedListItemEl !== null) {
-                resultIndex = this.focusedListItemEl.retrieve('resultIndex');
-                this.fireEvent('deselect', [this.focusedListItemEl,
-                        this.results[resultIndex], resultIndex]);
-            }
             this.results = results;
             this.listEl.empty();
             this.listEl.adopt(this.formatResults(results));
@@ -591,7 +538,6 @@ changes:
             if (this.options.maxVisibleItems) {
                 this.applyMaxHeight();
             }
-
             if (this.onUpdate) {
                 this.onUpdate();
                 this.onUpdate = null;
@@ -606,28 +552,25 @@ changes:
                 this.hide();
             }
         },
-        
-        setInputValue: function () {
-            /* Set the input value and hide the list. */
-            var resultIndex;
+        selectFocusedListItem: function () {
+            /* Set the input value to the focused list item's value and
+            hide the list. */
+            var resultIndex, valueEntered;
             if (this.focusedListItemEl) {
-                this.inputEl.set('value',
-                        this.focusedListItemEl.retrieve('resultText'));
+                valueEntered = this.focusedListItemEl.retrieve('resultText');
+                this.inputEl.set('value', valueEntered);
+                this.lastValueEntered = valueEntered;
                 resultIndex = this.focusedListItemEl.retrieve('resultIndex');
-                this.fireEvent('select', [this.focusedListItemEl,
-                        this.results[resultIndex], resultIndex]);
+                this.select(this.results[resultIndex], resultIndex);
             }
             this.hide();
         },
-        
         focusItem: function (direction) {
-            window.console.log('focusItem', direction);
             /* Focus on a list item. */
             var hoverClass, newFocusedItemEl;
             if (this.showing) {
                 hoverClass = this.options.classes.hover;
                 if (this.focusedListItemEl) {
-                    window.console.log('A list item was focused.');
                     if (direction == 'up') {
                         newFocusedItemEl = this.focusedListItemEl.getPrevious();
                     } else {
@@ -649,13 +592,11 @@ changes:
                 }
             }
         },
-        
         scrollFocusedItem: function (direction) {
             /* If less results are displayed then exist then when moving from
             the bottom item to the next item with the keyboard requires that
             the div is manually scrolled.
             */
-            window.console.log('scrollFocusedItem', direction);
             var focusedItemCoordinates, delta, top, scroll;
             focusedItemCoordinates =
                     this.focusedListItemEl.getCoordinates(this.listEl);
@@ -668,13 +609,11 @@ changes:
                 }
             } else {
                 top = focusedItemCoordinates.top;
-                window.console.log('top of focusedItem is ', top);
                 if (scroll.y && scroll.y > top) {
                     this.containerEl.scrollTo(0, top);
                 }
             }
         },
-        
         getItemFromEvent: function (e) {
             /* Extract the affected list item element from the event. */
             var target = e.target;
