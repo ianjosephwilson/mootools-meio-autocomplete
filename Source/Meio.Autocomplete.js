@@ -77,12 +77,12 @@ changes:
             formatContent: null,
             // Called when a new result has been selected.
             //
-            // function onSelect (listItemEl, result, resultIndex) {}
+            // function onSelect (result, resultIndex) {}
             onSelect: null,
             // Called when a prior result was selected but
             // has become de-selected.
             //
-            // function onDeselect (listItemEl, result, resultIndex) {}
+            // function onDeselect (result, resultIndex) {}
             onDeselect: null,
             //
             // The function startSyncResultsRequest is called to request results
@@ -92,7 +92,7 @@ changes:
             //     that in most cases a request will be fake and pull straight
             //     from the dom.
             //
-            // function startSyncResultsRequest (inputedText, onSuccess,
+            // function startSyncResultsRequest (valueEntered, onSuccess,
             //         onFailure) {
             //     onSuccess([]);
             // }
@@ -115,7 +115,7 @@ changes:
                 callee will call onSuccess with the results. The callee will
                 call onFailure on any error. Empty results are NOT an error.
 
-            function startResultsRequest(inputedText, onSuccess, onFailure) {
+            function startResultsRequest(valueEntered, onSuccess, onFailure) {
                 onSuccess([]);
             }
 
@@ -186,185 +186,59 @@ changes:
             // True if blur should not occur when we have a list item in focus.
             this.shouldNotBlur = false;
             
-            // Events of this class.
-            this.addEvents({
-            });
-
             // Special event for IE weirdness.
+            // TODO: Shouldn't this be wrapped in an IE only conditional?
             window.addEvent('unload', (function () {
-                // if autocomplete is off when you reload the page the input
-                // value gets erased
+                /* if autocomplete is off then when you reload the page the
+                   input value gets erased
+                */
                 if (this.inputEl !== null) {
-                    this.inputEl.set('autocomplete', 'on');
+                    this.inputEl.set('autocomplete',
+                            this.originalInputAutocomplete);
                 }
             }).bind(this));
 
+            this.windowEvents = {
+                unload: this.windowUnload.bind(this)
+            };
+
             // Events for the list/container element.
             this.listEvents = {
-                mouseover: function (e) {
-                    /* Mousing over a new list item should change the focused
-                    list item. */
-                    var itemEl, hoverClass;
-                    itemEl = this.getItemFromEvent(e);
-                    hoverClass = this.options.classes.hover;
-                    if (!itemEl) {
-                        return true;
-                    }
-                    if (this.focusedListItemEl) {
-                        this.focusedListItemEl.removeClass(hoverClass);
-                    }
-                    itemEl.addClass(hoverClass);
-                    this.focusedListItemEl = itemEl;
-                    this.fireEvent('focusItem', [this.focusedListItemEl]);
-                },
-                mousedown: function (e) {
-                    /* Select the focused list item. */
-                    e.preventDefault();
-                    this.shouldNotBlur = true;
-                    this.focusedListItemEl = this.getItemFromEvent(e);
-                    if (!this.focusedListItemEl) {
-                        return true;
-                    } else {
-                        if (this.active) {
-                            this.selectFocusedListItem();
-                        }
-                        this.focusedListItemEl.removeClass(
-                                this.options.classes.hover);
-                    }
-                }
+                mouseover: this.listMouseover.bind(this),
+                mousedown: this.listMousedown.bind(this)                
             };
 
             // Events for the input element.
             this.inputEvents = {
-                keydown: function (e) {
-                    /* Act on command keys. */
-                    var key = e.key;
-                    
-                    // A key press clears all prior clicks.
-                    this.activeClicks = 0;
-
-                    // Stop these keys because they act on the results.
-                    if (e.key == 'up' || e.key == 'down' ||
-                        (e.key == 'enter' && this.showing)) {
-                        // TODO: This might not work in all browsers,
-                        // in which case the form might be submitted.
-                        e.preventDefault();
-                    }
-                    if (key == 'up' || key == 'down') {
-                        if (this.showing) {
-                            // If the list is showing then,
-                            // move around in it.
-                            this.focusItem(key);
-                        } else {
-                            // Otherwise show the list
-                            // THEN move around in it.
-                            this.setupList();
-                            this.onUpdate = (function () {
-                                this.focusItem(key);
-                            }).bind(this);
-                        }
-                    } else if (key == 'enter') {
-                        this.selectFocusedListItem();
-                    } else if (key == 'tab') {
-                        if (this.options.selectOnTab) {
-                            this.selectFocusedListItem();
-                        }
-                    } else if (key == 'esc') {
-                        this.hide();
-                    }
-                },
-                keyup: function (e) {
-                    /* Start a request if the key was not a command key. */
-                    var valueEntered;
-                    if (!commandKeys[e.code] && e.key !== 'enter') {
-                        valueEntered = this.inputEl.get('value');
-                        if (this.lastValueEntered !== valueEntered) {
-                            this.lastValueEntered = valueEntered;
-                            this.deselect();
-                            if (this.requestTimer !== null) {
-                                window.clearTimeout(this.requestTimer);
-                            }
-                            this.requestTimer = (function () {
-                                this.requestTimer = null;
-                                this.setupList();
-                            }).delay(this.options.requestDelay, this);
-                        }
-                    }
-                },
-                focus: function () {
-                    /* Focus on the input field. */
-                    this.active = true;
-                    this.focusedListItemEl = null;
-                    this.positionResultsContainer();
-                },
-                'click': function () {
-                    /* Count active clicks on the input field. */
-                    if (this.active) {
-                        this.activeClicks = this.activeClicks + 1;
-                    }
-                    if (this.active && this.activeClicks >= 2 &&
-                            !this.showing) {
-                        this.setupList();
-                    }
-                },
-                'blur': function (e) {
-                    this.active = false;
-                    this.activeClicks = 0;
-                    if (this.shouldNotBlur) {
-                        this.inputEl.setCaretPosition('end');
-                        this.shouldNotBlur = false;
-                        if (this.focusedListItemEl) {
-                            this.hide();
-                        }
-                    } else {
-                        this.hide();
-                    }
-                }
+                keydown: this.inputKeydown.bind(this),
+                keyup: this.inputKeyup.bind(this),
+                click: this.inputClick.bind(this),
+                blur: this.inputBlur.bind(this),
+                focus: this.inputFocus.bind(this)
             };
-
-            function paste() {
-                /* Handle paste event. */
-                var valueEntered;
-                valueEntered = this.inputEl.get('value');
-                if (this.lastValueEntered !== valueEntered) {
-                    this.lastValueEntered = valueEntered;
-                    this.deselect();
-                    this.setupList();
-                }
-            }
+            
             /* Paste event varies between browsers. */
             if (Browser.opera || (Browser.firefox && Browser.version < 3)) {
-                this.inputEvents.input = paste;
+                this.inputEvents.input = this.inputPaste.bind(this);
             } else {
-                this.inputEvents.paste = paste;
+                this.inputEvents.paste = this.inputPaste.bind(this);
             }
             
             // ie6 only, uglyness
             // this fix the form being submited on the press of the enter key
             if (Browser.ie && Browser.version == 6) {
-                this.inputEvents.keypress = function (e) {
-                    if (e.key == 'enter' && this.showing) {
-                        e.preventDefault();
-                        this.selectFocusedListItem();
-                    }
-                };
+                this.inputEvents.keypress = this.inputKeypress.bind(this);
             }
+            // Original autocomplete value of input.
+            this.originalInputAutocomplete = null;
         },
         attach: function (inputEl) {
             var enteredText;
             this.inputEl = inputEl;
-            this.inputEl.set('autocomplete', 'off');
+            this.originalInputAutocomplete = this.inputEl.get('autocomplete');
+            
 
             this.buildList();
-            
-            Object.each(this.listEvents, function (handler, name, obj) {
-                obj[name] = handler.bind(this);
-                this.listEl.addEvent(name, obj[name]);
-            }, this);
-            Object.each(this.inputEvents, function (handler, name, obj) {
-                obj[name] = handler.bind(this);
-                this.inputEl.addEvent(name, obj[name]);
-            }, this);
 
             if (this.startSyncResultsRequest !== null) {
                 enteredText = this.inputEl.get('value');
@@ -374,6 +248,25 @@ changes:
                             this.syncResultsRequestFailure.bind(this));
                 }
             }
+            this.attachEvents();
+            this.inputEl.set('autocomplete', 'off');
+        },
+        destroy: function () {
+            if (this.originalInputAutocomplete !== null) {
+                this.inputEl.set('autocomplete',
+                        this.originalInputAutocomplete);
+            }
+            this.detachEvents();
+        },
+        attachEvents: function () {
+            this.inputEl.addEvents(this.inputEvents);
+            this.containerEl.addEvents(this.listEvents);
+            window.addEvents(this.windowEvents);
+        },
+        detachEvents: function () {
+            this.inputEl.removeEvents(this.inputEvents);
+            this.containerEl.removeEvents(this.listEvents);
+            window.removeEvents(this.windowEvents);
         },
         select: function (selectedResult, selectedResultIndex) {
             /* Select a result .*/
@@ -507,7 +400,9 @@ changes:
             this.containerEl.setStyle('visibility', 'hidden');
         },
         setupList: function () {
-            if (this.lastValueEntered.length >= this.options.minChars) {
+            if ((this.lastValueEntered === null &&
+                    this.options.minChars === 0) ||
+                    this.lastValueEntered.length >= this.options.minChars) {
                 this.stopResultsRequest();
                 this.stopRequestIndicator();
                 this.startRequestIndicator();
@@ -628,6 +523,148 @@ changes:
             }
             // TODO: Do we need to wrap this in $ ?
             return $(target);
+        },
+        listMouseover: function (e) {
+            /* Mousing over a new list item should change the focused
+                    list item. */
+            var itemEl, hoverClass;
+            itemEl = this.getItemFromEvent(e);
+            hoverClass = this.options.classes.hover;
+            if (!itemEl) {
+                return true;
+            }
+            if (this.focusedListItemEl) {
+                this.focusedListItemEl.removeClass(hoverClass);
+            }
+            itemEl.addClass(hoverClass);
+            this.focusedListItemEl = itemEl;
+            this.fireEvent('focusItem', [this.focusedListItemEl]);
+        },
+        listMousedown: function (e) {
+            /* Select the focused list item. */
+            e.preventDefault();
+            this.shouldNotBlur = true;
+            this.focusedListItemEl = this.getItemFromEvent(e);
+            if (!this.focusedListItemEl) {
+                return true;
+            } else {
+                if (this.active) {
+                    this.selectFocusedListItem();
+                }
+                this.focusedListItemEl.removeClass(
+                    this.options.classes.hover);
+            }
+        },
+        inputKeydown: function (e) {
+            /* Act on command keys. */
+            var key = e.key;
+            
+            // A key press clears all prior clicks.
+            this.activeClicks = 0;
+
+            // Stop these keys because they act on the results.
+            if (e.key == 'up' || e.key == 'down' ||
+                (e.key == 'enter' && this.showing)) {
+                // TODO: This might not work in all browsers,
+                // in which case the form might be submitted.
+                e.preventDefault();
+            }
+            if (key == 'up' || key == 'down') {
+                if (this.showing) {
+                    // If the list is showing then,
+                    // move around in it.
+                    this.focusItem(key);
+                } else {
+                    // Otherwise show the list
+                    this.setupList();
+                    this.onUpdate = (function () {
+                        this.focusItem(key);
+                    }).bind(this);
+                }
+            } else if (key == 'enter') {
+                this.selectFocusedListItem();
+            } else if (key == 'tab') {
+                if (this.options.selectOnTab) {
+                    this.selectFocusedListItem();
+                }
+            } else if (key == 'esc') {
+                this.hide();
+            }
+        },
+        inputKeyup: function (e) {
+            /* Start a request if the key was not a command key. */
+            var valueEntered;
+            if (!commandKeys[e.code] && e.key !== 'enter') {
+                valueEntered = this.inputEl.get('value');
+                if (this.lastValueEntered !== valueEntered) {
+                    this.lastValueEntered = valueEntered;
+                    this.deselect();
+                    if (this.requestTimer !== null) {
+                        window.clearTimeout(this.requestTimer);
+                    }
+                    this.requestTimer = (function () {
+                        this.requestTimer = null;
+                        this.setupList();
+                    }).delay(this.options.requestDelay, this);
+                }
+            }
+        },
+        inputFocus: function (e) {
+            /* Focus on the input field. */
+            this.active = true;
+            this.focusedListItemEl = null;
+            this.positionResultsContainer();
+        },
+        inputClick: function (e) {
+            /* Count active clicks on the input field,
+                    open list on double-click. */
+            if (this.active) {
+                this.activeClicks = this.activeClicks + 1;
+            }
+            if (this.active && this.activeClicks >= 2 &&
+                !this.showing) {
+                this.setupList();
+            }
+        },
+        inputBlur: function (e) {
+            /* */
+            this.active = false;
+            this.activeClicks = 0;
+            if (this.shouldNotBlur) {
+                // 
+                this.inputEl.setCaretPosition('end');
+                this.shouldNotBlur = false;
+                if (this.focusedListItemEl) {
+                    this.hide();
+                }
+            } else {
+                this.hide();
+            }
+        },
+        inputPaste: function (e) {
+            /* Handle paste event. */
+            var valueEntered;
+            valueEntered = this.inputEl.get('value');
+            if (this.lastValueEntered !== valueEntered) {
+                this.lastValueEntered = valueEntered;
+                this.deselect();
+                this.setupList();
+            }
+        },
+        inputKeypress: function (e) {
+            if (e.key == 'enter' && this.showing) {
+                e.preventDefault();
+                this.selectFocusedListItem();
+            }
+        },
+        windowUnload: function (e) {
+            /* if autocomplete is off then when you reload the page the
+                   input value gets erased
+                */
+            if (this.inputEl !== null) {
+                this.inputEl.set('autocomplete',
+                        this.originalInputAutocomplete);
+            }
         }
     });
 
