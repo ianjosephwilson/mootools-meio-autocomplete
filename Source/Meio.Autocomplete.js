@@ -236,10 +236,7 @@ changes:
             var enteredText;
             this.inputEl = inputEl;
             this.originalInputAutocomplete = this.inputEl.get('autocomplete');
-            
-
             this.buildList();
-
             if (this.startSyncResultsRequest !== null) {
                 enteredText = this.inputEl.get('value');
                 if (enteredText) {
@@ -662,8 +659,12 @@ changes:
                    input value gets erased
                 */
             if (this.inputEl !== null) {
-                this.inputEl.set('autocomplete',
-                        this.originalInputAutocomplete);
+                if (this.originalInputAutocomplete !== null) {
+                    this.inputEl.erase('autocomplete');
+                } else {
+                    this.inputEl.set('autocomplete',
+                            this.originalInputAutocomplete);
+                }
             }
         }
     });
