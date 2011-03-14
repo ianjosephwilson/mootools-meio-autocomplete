@@ -30,6 +30,23 @@ changes:
 (function ($) {
     var commandKeys, Autocomplete;
 
+    function fakeStartSyncResultsRequest(initialValues, onSuccess, onFailure) {
+        /* A fake sync request that just uses the values in the DOM. */
+        var result;
+        if (initialValues.enteredText &&
+                (!initialValues.hasOwnProperty('hiddenValue') ||
+                 initialValues.hiddenValue)) {
+            result = {
+                text: initialValues.enteredText
+            };
+            if (initialValues.hasOwnProperty('hiddenValue')) {
+                result.value = initialValues.hiddenValue;
+            }
+            return onSuccess([result]);
+        } else {
+            return onFailure([]);
+        }
+    }
     commandKeys = {
         9:   1,  // tab
         16:  1,  // shift
@@ -41,8 +58,7 @@ changes:
         38:  1,  // up
         39:  1,  // right
         40:  1   // down
-    }; 
-    
+    };    
     Autocomplete = new Class({
         Implements: [Options, Events],
         
@@ -90,13 +106,15 @@ changes:
             //     onSuccess with the results. The callee will call onFailure on
             //     any error. Empty results are NOT an error. It is expected 
             //     that in most cases a request will be fake and pull straight
-            //     from the dom.
+            //     from the dom. The parameter initialValues is an object which
+            //     will inclued the enteredText and if hidden is true will also
+            //     include the hiddenValue.
             //
-            // function startSyncResultsRequest (valueEntered, onSuccess,
+            // function startSyncResultsRequest (initialValues, onSuccess,
             //         onFailure) {
             //     onSuccess([]);
             // }
-            startSyncResultsRequest: null,
+            startSyncResultsRequest: fakeStartSyncResultsRequest,
             // The function stopResultsRequest is meant to cancel a sync request
             //     for results that was started earlier.  If there is no request
             //     to cancel then nothing will be done.
@@ -231,29 +249,68 @@ changes:
             }
             // Original autocomplete value of input.
             this.originalInputAutocomplete = null;
+
+            // True if an element should be used to store a value in addition
+            // to the text stored in the input element.
+            this.hidden = false;
+            // Element to store value.
+            // Only used if hiddenEl is passed in attach.
+            this.hiddenEl = null;
         },
-        attach: function (inputEl) {
-            var enteredText;
+        attach: function (inputEl, hiddenEl) {
+            /* Attach to the DOM.
+
+            hiddenEl is optional.
+            */
+            var enteredText, initialValues;
             this.inputEl = inputEl;
+            if (typeof hiddenEl !== 'undefined' && hiddenEl) {
+                this.hidden = true;
+                this.hiddenEl = hiddenEl;
+            }
             this.originalInputAutocomplete = this.inputEl.get('autocomplete');
+            this.inputEl.set('autocomplete', 'off');
             this.buildList();
             if (this.startSyncResultsRequest !== null) {
                 enteredText = this.inputEl.get('value');
+                this.lastValueEntered = enteredText;
                 if (enteredText) {
-                    this.startSyncResultsRequest(enteredText,
+                    initialValues = {
+                        enteredText: enteredText
+                    };
+                    if (this.hidden) {
+                        initialValues.hiddenValue = this.hiddenEl.get('value');
+                    }
+                    this.startSyncResultsRequest(initialValues,
                             this.syncResultsRequestSuccess.bind(this),
                             this.syncResultsRequestFailure.bind(this));
                 }
+            } else {
+                this.lastValueEntered = this.inputEl.get('value');
             }
             this.attachEvents();
-            this.inputEl.set('autocomplete', 'off');
         },
         destroy: function () {
+            this.detachEvents();
+            this.stopResultsRequest();
             if (this.originalInputAutocomplete !== null) {
                 this.inputEl.set('autocomplete',
                         this.originalInputAutocomplete);
             }
-            this.detachEvents();
+            if (this.requestTimer !== null) {
+                window.clearTimeout(this.requestTimer);
+            }
+            if (this.stopSyncResultsRequest !== null) {
+                this.stopSyncResultsRequest();
+            }
+            if (this.containerEl !== null) {
+                this.containerEl.destroy();
+                this.containerEl = null;
+            }
+            // Remove references.
+            this.listEl = null;
+            this.inputEl = null;
+            this.hiddenEl = null;
         },
         attachEvents: function () {
             this.inputEl.addEvents(this.inputEvents);
@@ -270,6 +327,9 @@ changes:
             if (this.selectedResult !== null) {
                 this.deselect();
             }
+            if (this.hidden) {
+                this.hiddenEl.set('value', selectedResult.value);
+            }
             this.selectedResult = selectedResult;
             this.selectedResultIndex = selectedResultIndex;
             this.fireEvent('select', [selectedResult, selectedResultIndex]);
@@ -278,6 +338,9 @@ changes:
         deselect: function () {
             /* Deselect a result. */
             if (this.selectedResult !== null) {
+                if (this.hidden) {
+                    this.hiddenEl.set('value', '');
+                }
                 this.inputEl.removeClass(this.options.classes.selected);
                 this.fireEvent('deselect', [this.selectedResult,
                         this.selectedResultIndex]);
@@ -287,37 +350,58 @@ changes:
         },
         syncResultsRequestSuccess: function (results) {
             if (results.length === 0) {
+                if (this.hidden) {
+                    this.hiddenEl.set('value', '');
+                }
                 this.inputEl.set('value', '');
             } else {
                 this.inputEl.set('value', results[0].text);
-                this.lastEnteredText = results[0].text;
-                this.select(results[0], 0);
+                if (this.hidden) {
+                    this.hiddenEl.set('value', results[0].value);
+                }
+                this.lastValueEntered = results[0].text;
                 this.results = [results[0]];
+                this.select(results[0], 0);
             }
         },
         syncResultsRequestFailure: function (failureDetails) {
+            // TODO: This should probably be configurable
+            // since it erases user data whenever the page
+            // loads.  Maybe we should optionally check for the selected
+            // class? For example when there is no hidden value we cannot
+            // tell the difference between non-empty text that is a selection
+            // or not.
             this.inputEl.set('value', '');
+            if (this.hidden) {
+                this.hiddenEl.set('value', '');
+            }
         },
-        formatTitle: function (inputedText, result, resultIndex) {
+        formatTitle: function (enteredText, result, resultIndex) {
+            /* Used as the list item's title. */
             return result.text;
         },
-        formatContent: function (inputedText, result, resultIndex) {
-            return result.content;
+        formatContent: function (enteredText, result, resultIndex) {
+            /* The content of a list item.
+            Must return an element or a string.
+            This is probably the method you want to overwrite.
+            */
+            return result.text;
         },
-        formatResult: function (inputedText, result, resultIndex) {
+        formatResult: function (enteredText, result, resultIndex) {
+            /* Formats an entire list item. */
             var listItemEl, cssClass, title, content;
             if (resultIndex % 2) {
                 cssClass = this.options.classes.even;
             } else {
                 cssClass = this.options.classes.odd;
             }
-            title = this.formatTitle(inputedText, result, resultIndex);
-            content = this.formatContent(inputedText, result, resultIndex);
+            title = this.formatTitle(enteredText, result, resultIndex);
+            content = this.formatContent(enteredText, result, resultIndex);
             listItemEl = new Element('li', {
                 'title': title,
                 'className': cssClass
             });
-            if (typeOf(content === 'string')) {
+            if (typeof content === 'string') {
                 listItemEl.set('html', content);
             } else {
                 listItemEl.adopt(content);
@@ -327,6 +411,7 @@ changes:
             return listItemEl;
         },
         formatResults: function (results) {
+            /* Formats the results to be injected into the list. */
             var i, resultEls;
             resultEls = [];
             for (i = 0; i < results.length; i = i + 1) {
