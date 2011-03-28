@@ -578,6 +578,8 @@ changes:
             the div is manually scrolled.
             */
             var focusedItemCoordinates, delta, top, scroll;
+            // This calls getScrolls which is really slow. If you hold the
+            // downkey down this will be apparent.
             focusedItemCoordinates =
                     this.focusedListItemEl.getCoordinates(this.listEl);
             scroll = this.containerEl.getScroll();
