@@ -756,7 +756,7 @@ changes:
         }
     });
 
-    if (window.hasOwnProperty('Meio')) {
+    if ('Meio' in window) {
         window.Meio.Autocomplete = Autocomplete;
     } else {
         window.Meio = {
