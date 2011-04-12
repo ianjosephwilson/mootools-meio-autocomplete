@@ -203,18 +203,6 @@ changes:
 
             // True if blur should not occur when we have a list item in focus.
             this.shouldNotBlur = false;
-            
-            // Special event for IE weirdness.
-            // TODO: Shouldn't this be wrapped in an IE only conditional?
-            window.addEvent('unload', (function () {
-                /* if autocomplete is off then when you reload the page the
-                   input value gets erased
-                */
-                if (this.inputEl !== null) {
-                    this.inputEl.set('autocomplete',
-                            this.originalInputAutocomplete);
-                }
-            }).bind(this));
 
             this.windowEvents = {
                 unload: this.windowUnload.bind(this)
