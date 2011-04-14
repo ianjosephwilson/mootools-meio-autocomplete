@@ -412,6 +412,9 @@ changes:
             this.containerEl = new Element('div', {
                 'class': this.options.classes.container
             });
+            // Put the container in before calling the iframe shim
+            // because it needs to be IN the dom.
+            this.containerEl.inject(document.body, 'bottom');
             if (Browser.ie && Browser.version == 6) {
                 this.shim = new IframeShim(this.containerEl, {
                     top: 0,
@@ -420,7 +423,6 @@ changes:
             }
             this.listEl = new Element('ul');
             this.listEl.inject(this.containerEl);
-            this.containerEl.inject(document.body, 'bottom');
         },
         applyMaxHeight: function () {
             /*
