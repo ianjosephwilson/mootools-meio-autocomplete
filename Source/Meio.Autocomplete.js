@@ -204,10 +204,6 @@ changes:
             // True if blur should not occur when we have a list item in focus.
             this.shouldNotBlur = false;
 
-            this.windowEvents = {
-                unload: this.windowUnload.bind(this)
-            };
-
             // Events for the list/container element.
             this.listEvents = {
                 mouseover: this.listMouseover.bind(this),
@@ -235,9 +231,6 @@ changes:
             if (Browser.ie && Browser.version == 6) {
                 this.inputEvents.keypress = this.inputKeypress.bind(this);
             }
-            // Original autocomplete value of input.
-            this.originalInputAutocomplete = null;
-
             // True if an element should be used to store a value in addition
             // to the text stored in the input element.
             this.hidden = false;
@@ -251,7 +244,7 @@ changes:
             hiddenEl is optional.
             */
             var enteredText, initialValues;
-            this.inputEl = inputEl;
+            this.inputEl = $(inputEl);
             if (typeof hiddenEl !== 'undefined' && hiddenEl) {
                 this.hidden = true;
                 this.hiddenEl = hiddenEl;
@@ -729,19 +722,6 @@ changes:
             if (e.key == 'enter' && this.showing) {
                 e.preventDefault();
                 this.selectFocusedListItem();
-            }
-        },
-        windowUnload: function (e) {
-            /* if autocomplete is off then when you reload the page the
-                   input value gets erased
-                */
-            if (this.inputEl !== null) {
-                if (this.originalInputAutocomplete !== null) {
-                    this.inputEl.erase('autocomplete');
-                } else {
-                    this.inputEl.set('autocomplete',
-                            this.originalInputAutocomplete);
-                }
             }
         }
     });
